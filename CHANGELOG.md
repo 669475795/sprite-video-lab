@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- Add Linux CUDA setup and launch scripts plus an RTX 5090 deployment guide.
+- Add generic solid-key edge decontamination for magenta, green, blue, white, and black backgrounds.
+
+### Fixes
+- Preserve clean subject RGB in semi-transparent pixels by reversing the known-background composite.
+- Extend cleaned RGB two pixels into fully transparent neighbors to prevent texture-filtering color fringes.
+
 ## 0.2.0 - 2026-06-07
 
 ### Features

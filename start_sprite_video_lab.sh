@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AI_ROOT="${SPRITE_VIDEO_LAB_AI_ROOT:-$ROOT_DIR/work/models}"
+PYTHON_EXE="${SPRITE_VIDEO_LAB_PYTHON:-$AI_ROOT/venv/bin/python}"
+
+if [[ ! -x "$PYTHON_EXE" ]]; then
+  printf 'Python runtime not found: %s\nRun ./setup_ai_runtime.sh first.\n' "$PYTHON_EXE" >&2
+  exit 1
+fi
+
+export SPRITE_VIDEO_LAB_HOST="${SPRITE_VIDEO_LAB_HOST:-127.0.0.1}"
+export SPRITE_VIDEO_LAB_PORT="${SPRITE_VIDEO_LAB_PORT:-8894}"
+export SPRITE_VIDEO_LAB_WORK_DIR="${SPRITE_VIDEO_LAB_WORK_DIR:-$ROOT_DIR/work}"
+export SPRITE_VIDEO_LAB_AI_MODEL_CACHE="${SPRITE_VIDEO_LAB_AI_MODEL_CACHE:-$AI_ROOT/huggingface}"
+export HF_HOME="${HF_HOME:-$SPRITE_VIDEO_LAB_AI_MODEL_CACHE}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-$SPRITE_VIDEO_LAB_AI_MODEL_CACHE/hub}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$SPRITE_VIDEO_LAB_AI_MODEL_CACHE/transformers}"
+export HF_MODULES_CACHE="${HF_MODULES_CACHE:-$SPRITE_VIDEO_LAB_AI_MODEL_CACHE/modules}"
+export HF_XET_CACHE="${HF_XET_CACHE:-$SPRITE_VIDEO_LAB_AI_MODEL_CACHE/xet}"
+
+exec "$PYTHON_EXE" "$ROOT_DIR/server.py" \
+  --serve \
+  --host "$SPRITE_VIDEO_LAB_HOST" \
+  --port "$SPRITE_VIDEO_LAB_PORT"

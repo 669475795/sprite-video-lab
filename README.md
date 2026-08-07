@@ -25,7 +25,7 @@ Sprite Video Lab 是一个本地网页工具，用来把视频片段、单张图
 - 视频区间预览，支持按帧设置起止位置。
 - 批处理前先单帧预览参数效果。
 - 自动宽度居中画布，适合横向连招、特效条、多姿态行。
-- 纯色/绿幕抠图，支持阈值、软边、去色溢出和 Halo 收缩。
+- 任意纯色色幕抠图，支持阈值、软边、已知背景反混色、透明区颜色外扩和 Halo 收缩。
 - BiRefNet AI 主体抠图。
 - Luma 亮度抠图，用来保留发光、火焰、闪电、粒子和亮部 VFX。
 - CorridorKey 绿幕/蓝幕边缘精修和前景颜色重建。
@@ -70,7 +70,9 @@ Sprite Video Lab 目前提供这些背景处理模式：
 - `BiRefNet + Luma 合并后 / CorridorKey 精修`：先合成主体 alpha 和亮度 alpha，再用 CorridorKey 做边缘/颜色重建。
 - `不抠图`：素材已经带透明通道时，只做缩放、对齐和导出。
 
-灰底、白底、黑底素材通常不需要去色溢出；绿幕/蓝幕素材再开启 despill 和 CorridorKey 会更稳。
+纯色背景可使用 despill 根据已知键色恢复半透明边缘的原始前景色，包括洋红、绿色、
+蓝色、白色和黑色背景。绿幕/蓝幕素材还可以开启 CorridorKey 做模型精修；CorridorKey
+本身不支持洋红幕，洋红素材应使用 Chroma 或 BiRefNet 加通用边缘反混色。
 
 ## 环境要求
 
@@ -93,6 +95,7 @@ Sprite Video Lab 目前提供这些背景处理模式：
 
 - Agent 安装说明：[AGENT_INSTALL.md](./AGENT_INSTALL.md)
 - AI 抠图细节：[AI_MATTING.md](./AI_MATTING.md)
+- RTX 5090 Linux 服务器部署与洋红幕验证：[SERVER_DEPLOY.zh-CN.md](./SERVER_DEPLOY.zh-CN.md)
 
 安装完成后，agent 应启动本地服务并给出访问地址。默认地址：
 
@@ -151,6 +154,9 @@ requirements.txt                  基础运行依赖
 requirements-ai.txt               可选 AI 抠图依赖
 setup_ai_runtime.bat              Windows AI 环境安装脚本
 start_sprite_video_lab.bat        Windows 启动器
+setup_ai_runtime.sh               Linux CUDA AI 环境安装脚本
+start_sprite_video_lab.sh         Linux 启动器
+SERVER_DEPLOY.zh-CN.md            RTX 5090 部署与洋红幕验证说明
 start_sprite_video_lab_portable.bat 便携版启动器
 build_portable_bundle.ps1         便携版打包脚本
 work/                             运行时输出目录，已被 git 忽略

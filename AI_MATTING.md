@@ -39,7 +39,7 @@ set SPRITE_VIDEO_LAB_PYTHON=<python-runtime>
 
 ## Setup
 
-Run:
+On Windows, run:
 
 ```bat
 setup_ai_runtime.bat
@@ -53,11 +53,25 @@ Then start the app as usual:
 start_sprite_video_lab.bat
 ```
 
+On an NVIDIA Linux server, run:
+
+```bash
+./setup_ai_runtime.sh
+./start_sprite_video_lab.sh
+```
+
+The Linux installer defaults to the PyTorch CUDA 12.8 wheel and fails verification when PyTorch
+cannot see CUDA. See `SERVER_DEPLOY.zh-CN.md` for the RTX 5090 test workflow and safe SSH access.
+
 ## Tuning
 
 - `BiRefNet HR-matting` is the quality-first default.
 - `BiRefNet lite-2K` is the lighter fallback when memory or speed is tight.
-- If a green edge remains, raise `despill strength` first. Try `1.2` to `1.8`.
+- For a solid-color background, raise `despill strength` toward `1.0`; `1.0` applies the full
+  known-background inverse composite to semi-transparent edge pixels. This supports magenta,
+  green, blue, white, and black keys.
+- The pipeline also bleeds recovered subject RGB two pixels into fully transparent neighbors so
+  later texture filtering does not sample stale key color.
 - If the edge is still dirty, set `halo shrink` to `1` or `2`.
 - For green-screen sources, use manual background color and pick the actual background green when auto corner sampling misses the key color.
 - Use `BiRefNet subject / Luma restore brights` for VFX-heavy material. Use plain `BiRefNet` when there is no glow or bright particle effect to preserve.

@@ -130,6 +130,8 @@ AI_MATTE_RESOLUTION_AUTO = "auto"
 AI_MATTE_MIN_RESOLUTION = 256
 AI_MATTE_MAX_RESOLUTION = 2560
 AI_MATTE_RESOLUTION_MULTIPLE = 32
+MATTE_DECONTAMINATE_MIN_ALPHA = 8
+MATTE_EDGE_BLEED_PIXELS = 2
 OUTPUT_SCALE_MIN = 0.05
 OUTPUT_SCALE_MAX = 2.0
 CORRIDORKEY_REPO_URL = "https://github.com/nikopueringer/CorridorKey"
@@ -1339,6 +1341,8 @@ def dominant_border_key_color(image: Image.Image) -> tuple[tuple[int, int, int],
             return 2
         if color[2] >= 96 and color[2] - max(color[0], color[1]) >= 48:
             return 2
+        if min(color[0], color[2]) >= 96 and min(color[0], color[2]) - color[1] >= 48:
+            return 2
         return 0
 
     screen_candidates = [
@@ -1387,14 +1391,10 @@ def chroma_key_frame(
         else:
             alpha = int(((dist - threshold) / softness) * 255)
 
-        max_rb = max(r_value, b_value)
-        spill = max(0, g_value - max_rb)
-        closeness = max(0.0, 1.0 - min(dist / max_distance, 1.0))
-        reduction = int(spill * despill_strength * max(closeness, 1.0 - (alpha / 255.0)))
         output_pixels.append(
             (
                 r_value,
-                max(0, g_value - reduction),
+                g_value,
                 b_value,
                 alpha,
             )
@@ -1409,7 +1409,8 @@ def chroma_key_frame(
         eroded = alpha_channel.filter(ImageFilter.MinFilter(filter_size))
         keyed.putalpha(eroded)
 
-    return keyed
+    keyed = despill_alpha_edges(keyed, key_rgb, despill_strength)
+    return bleed_transparent_edges(keyed)
 
 
 def import_ai_matte_dependencies():
@@ -1648,7 +1649,7 @@ def corridorkey_refine_frame(
     )
     alpha = corridorkey_alpha_to_image(result["processed"][..., 3:4])
     refined = apply_alpha_mask(image, alpha)
-    refined = despill_alpha_edges(refined, auto_key_color(image), despill_strength)
+    refined = bleed_transparent_edges(refined)
 
     info = {
         "corridorkey_enabled": True,
@@ -1906,38 +1907,112 @@ def despill_alpha_edges(
     key_rgb: tuple[int, int, int],
     strength: float,
 ) -> Image.Image:
-    normalized_strength = max(0.0, min(2.5, float(strength or 0.0)))
+    normalized_strength = max(0.0, min(1.0, float(strength or 0.0)))
     if normalized_strength <= 0:
         return image
 
     rgba = image.convert("RGBA")
-    k_r, k_g, k_b = key_rgb
-    key_channels = (k_r, k_g, k_b)
-    spill_channel = max(range(3), key=lambda index: key_channels[index])
-    sorted_key_channels = sorted(key_channels, reverse=True)
-    if sorted_key_channels[0] - sorted_key_channels[1] < 24:
-        return image
+    background = tuple(float(value) for value in key_rgb)
     output_pixels: list[tuple[int, int, int, int]] = []
     for r_value, g_value, b_value, alpha in rgba.getdata():
-        channels = [r_value, g_value, b_value]
-        spill_value = channels[spill_channel]
-        other_values = [value for index, value in enumerate(channels) if index != spill_channel]
-        spill = max(0, spill_value - max(other_values))
-        if spill <= 0:
+        if alpha < MATTE_DECONTAMINATE_MIN_ALPHA or alpha >= 255:
             output_pixels.append((r_value, g_value, b_value, alpha))
             continue
 
-        dist = math.sqrt((r_value - k_r) ** 2 + (g_value - k_g) ** 2 + (b_value - k_b) ** 2)
-        key_closeness = 1.0 - min(dist / 220.0, 1.0)
-        edge_factor = 1.0 - (alpha / 255.0)
-        cleanup_factor = max(edge_factor, key_closeness * 0.7)
-        reduction = int(spill * normalized_strength * cleanup_factor)
-        channels[spill_channel] = max(0, spill_value - reduction)
-        output_pixels.append((channels[0], channels[1], channels[2], alpha))
+        alpha_ratio = max(alpha / 255.0, 0.05)
+        observed = (float(r_value), float(g_value), float(b_value))
+        recovered = tuple(
+            (observed[index] - (1.0 - alpha_ratio) * background[index]) / alpha_ratio
+            for index in range(3)
+        )
+        cleaned = tuple(
+            max(
+                0,
+                min(
+                    255,
+                    round(
+                        observed[index]
+                        + (recovered[index] - observed[index]) * normalized_strength
+                    ),
+                ),
+            )
+            for index in range(3)
+        )
+        output_pixels.append((cleaned[0], cleaned[1], cleaned[2], alpha))
 
     cleaned = Image.new("RGBA", rgba.size)
     cleaned.putdata(output_pixels)
     return cleaned
+
+
+def bleed_transparent_edges(
+    image: Image.Image,
+    pixels: int = MATTE_EDGE_BLEED_PIXELS,
+) -> Image.Image:
+    """Extend nearby subject RGB into transparent pixels without changing alpha."""
+    radius = max(0, int(pixels))
+    if radius <= 0:
+        return image
+
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    source_mask = alpha.point(
+        lambda value: 255 if value >= MATTE_DECONTAMINATE_MIN_ALPHA else 0
+    )
+    if source_mask.getbbox() is None:
+        return rgba
+
+    width, height = rgba.size
+    filled = rgba.copy()
+    occupied_mask = alpha.point(lambda value: 255 if value > 0 else 0)
+    directions = (
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    )
+
+    def shifted(source: Image.Image, dx: int, dy: int) -> Image.Image:
+        shifted_image = Image.new(source.mode, source.size, 0)
+        source_box = (
+            max(0, -dx),
+            max(0, -dy),
+            min(width, width - dx),
+            min(height, height - dy),
+        )
+        if source_box[0] < source_box[2] and source_box[1] < source_box[3]:
+            shifted_image.paste(
+                source.crop(source_box),
+                (max(0, dx), max(0, dy)),
+            )
+        return shifted_image
+
+    for _step in range(radius):
+        next_filled = filled.copy()
+        next_source_mask = source_mask.copy()
+        next_occupied_mask = occupied_mask.copy()
+        for dx, dy in directions:
+            shifted_mask = shifted(source_mask, dx, dy)
+            fill_mask = ImageChops.multiply(
+                shifted_mask,
+                ImageChops.invert(next_occupied_mask),
+            )
+            if fill_mask.getbbox() is None:
+                continue
+            shifted_rgba = shifted(filled, dx, dy)
+            next_filled = Image.composite(shifted_rgba, next_filled, fill_mask)
+            next_source_mask = ImageChops.lighter(next_source_mask, fill_mask)
+            next_occupied_mask = ImageChops.lighter(next_occupied_mask, fill_mask)
+        filled = next_filled
+        source_mask = next_source_mask
+        occupied_mask = next_occupied_mask
+
+    filled.putalpha(alpha)
+    return filled
 
 
 def apply_matte_pipeline(
@@ -1964,9 +2039,10 @@ def apply_matte_pipeline(
         raise ValueError("no frames to matte")
 
     mode = normalize_matte_mode(matte_mode, chroma_enabled)
-    key_rgb = auto_key_color(raw_images[0])
+    key_rgb, key_border_ratio = dominant_border_key_color(raw_images[0])
     if key_mode == "manual":
         key_rgb = parse_hex_color(manual_key_hex)
+        key_border_ratio = 1.0
     normalized_luma_black = max(0, min(254, int(luma_black)))
     normalized_luma_white = max(normalized_luma_black + 1, min(255, int(luma_white)))
     matte_info = {
@@ -1981,7 +2057,10 @@ def apply_matte_pipeline(
         "luma_white": normalized_luma_white,
         "luma_gamma": max(0.05, float(luma_gamma or 1.0)),
         "luma_strength": max(0.0, min(2.0, float(luma_strength or 1.0))),
-        "despill_strength": max(0.0, min(2.5, float(despill_strength or 0.0))),
+        "despill_strength": max(0.0, min(1.0, float(despill_strength or 0.0))),
+        "key_border_ratio": key_border_ratio,
+        "edge_decontamination": False,
+        "edge_bleed_pixels": MATTE_EDGE_BLEED_PIXELS,
         "halo_pixels": max(0, int(halo_pixels)),
         "corridorkey_enabled": False,
         "corridorkey_screen_color": "",
@@ -1996,6 +2075,7 @@ def apply_matte_pipeline(
     }
     use_corridorkey = bool((corridorkey_enabled or mode_uses_corridorkey) and mode != "none")
     resolved_corridorkey_screen = resolve_corridorkey_screen(corridorkey_screen, key_rgb)
+    has_reliable_key_background = key_mode == "manual" or key_border_ratio >= 0.18
 
     if mode == "none":
         return raw_images, key_rgb, matte_info
@@ -2003,13 +2083,16 @@ def apply_matte_pipeline(
     if mode in {"chroma", "corridorkey"}:
         keyed_frames = []
         corridor_info: dict | None = None
+        matte_info["edge_decontamination"] = (
+            not use_corridorkey and matte_info["despill_strength"] > 0
+        )
         for raw_image in raw_images:
             chroma_frame = chroma_key_frame(
                 image=raw_image,
                 key_rgb=key_rgb,
                 threshold=threshold,
                 softness=softness,
-                despill_strength=despill_strength,
+                despill_strength=matte_info["despill_strength"],
                 halo_pixels=halo_pixels,
             )
             if use_corridorkey:
@@ -2042,7 +2125,14 @@ def apply_matte_pipeline(
                 filter_size = (matte_info["halo_pixels"] * 2) + 1
                 alpha = alpha.filter(ImageFilter.MinFilter(filter_size))
             keyed_frame = apply_alpha_mask(raw_image, alpha)
-            keyed_frame = despill_alpha_edges(keyed_frame, key_rgb, matte_info["despill_strength"])
+            if has_reliable_key_background:
+                keyed_frame = despill_alpha_edges(
+                    keyed_frame,
+                    key_rgb,
+                    matte_info["despill_strength"],
+                )
+                matte_info["edge_decontamination"] = matte_info["despill_strength"] > 0
+            keyed_frame = bleed_transparent_edges(keyed_frame)
             keyed_frames.append(keyed_frame)
         return keyed_frames, key_rgb, matte_info
 
@@ -2091,7 +2181,14 @@ def apply_matte_pipeline(
                 keyed_frame.putalpha(refined_alpha)
         else:
             keyed_frame = apply_alpha_mask(raw_image, alpha)
-            keyed_frame = despill_alpha_edges(keyed_frame, key_rgb, matte_info["despill_strength"])
+            if has_reliable_key_background:
+                keyed_frame = despill_alpha_edges(
+                    keyed_frame,
+                    key_rgb,
+                    matte_info["despill_strength"],
+                )
+                matte_info["edge_decontamination"] = matte_info["despill_strength"] > 0
+            keyed_frame = bleed_transparent_edges(keyed_frame)
         keyed_frames.append(keyed_frame)
 
     if ai_info:
